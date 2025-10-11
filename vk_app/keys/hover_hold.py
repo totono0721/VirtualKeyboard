@@ -3,8 +3,16 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PyQt6.QtCore import QPoint, QPointF, Qt
-from PyQt6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QHoverEvent,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PyQt6.QtWidgets import QMenu
 
 from ..models import KeyDefinition
@@ -22,6 +30,7 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
         # detect the cursor entering them, so the configured press-hold
         # shortcuts would not trigger.
         self.setMouseTracking(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self._active_region: Optional[str] = None
         self._active_combo = None
         self._paths = self._build_paths()
@@ -102,7 +111,10 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(self._border_color, 2))
+        border_color = QColor(self._border_color)
+        if self._active_region:
+            border_color = border_color.lighter(135)
+        painter.setPen(QPen(border_color, 3 if self._active_region else 2))
 
         colors = {
             "up": QColor("#2c7fb8"),
@@ -112,11 +124,11 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
             "center": QColor(0, 0, 0, 180),
         }
 
-        highlight = QColor("#ffaa00")
+        lighten_factor = 120
         for region, path in self._paths.items():
             fill_color = colors.get(region, QColor("#5f5f5f"))
             if region == self._active_region:
-                fill_color = highlight
+                fill_color = QColor(fill_color).lighter(lighten_factor)
             painter.setBrush(fill_color)
             painter.drawPath(path)
 
@@ -153,6 +165,8 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and not self.keyboard.edit_mode:
+            region = self._resolve_region(event.position())
+            self._set_active_region(region)
             event.accept()
             return
         super().mousePressEvent(event)
@@ -164,6 +178,13 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
             return
         region = self._resolve_region(event.position())
         self._set_active_region(region)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton and not self.keyboard.edit_mode:
+            self._set_active_region(None)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def contextMenuEvent(self, event) -> None:  # type: ignore[override]
         menu = QMenu(self)
@@ -184,13 +205,23 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
 
     def enterEvent(self, event) -> None:  # type: ignore[override]
         if not self.keyboard.edit_mode:
-            region = self._resolve_region(event.position())
-            self._set_active_region(region)
+            self._set_active_region(None)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # type: ignore[override]
         self._set_active_region(None)
         super().leaveEvent(event)
+
+    def event(self, event):  # type: ignore[override]
+        if isinstance(event, QHoverEvent) and not self.keyboard.edit_mode:
+            if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverMove):
+                region = self._resolve_region(event.position())
+                self._set_active_region(region)
+                return True
+            if event.type() == QEvent.Type.HoverLeave:
+                self._set_active_region(None)
+                return True
+        return super().event(event)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._release_active_combination()
