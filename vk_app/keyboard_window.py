@@ -44,12 +44,14 @@ class KeyboardWindow(QMainWindow):
         self.tray_icon: Optional[QSystemTrayIcon] = None
         self._tray_menu_show_action: Optional[QAction] = None
         self._tray_menu_hide_action: Optional[QAction] = None
+        self._force_exit = False
 
         self._setup_actions()
         self._setup_tray_icon()
         self.config_panel = ConfigurationPanel(self)
         self.setCentralWidget(self.config_panel)
         self._load_layout()
+        self._sync_edit_mode_with_visibility()
 
     # region Actions & Menus
     def _setup_actions(self) -> None:
@@ -61,7 +63,7 @@ class KeyboardWindow(QMainWindow):
         add_action.triggered.connect(self.add_key)
         layout_menu.addAction(add_action)
 
-        toggle_edit_action = QAction("切换编辑模式", self)
+        toggle_edit_action = QAction("拖动调整模式 (自动)", self)
         toggle_edit_action.setShortcut("Ctrl+E")
         toggle_edit_action.setCheckable(True)
         toggle_edit_action.triggered.connect(self.toggle_edit_mode)
@@ -80,10 +82,10 @@ class KeyboardWindow(QMainWindow):
 
         layout_menu.addSeparator()
         exit_action = QAction("退出", self)
-        exit_action.triggered.connect(self.close)
+        exit_action.triggered.connect(self.request_exit)
         layout_menu.addAction(exit_action)
 
-        self.statusBar().showMessage("按 Ctrl+E 进入编辑模式，Ctrl+N 新建按键")
+        self.statusBar().showMessage("配置窗口开启时按键可拖动调整，Ctrl+N 新建按键")
 
     # endregion
 
@@ -93,7 +95,7 @@ class KeyboardWindow(QMainWindow):
         position = QPoint(50 + (index % 5) * 90, 50 + (index // 5) * 90)
         definition = KeyDefinition(
             label="A",
-            sequence="A",
+            sequence="a",
             position=position,
             config={
                 "activation_mode": VirtualKeyWindow.ACTIVATION_CLICK_ONCE,
@@ -126,10 +128,10 @@ class KeyboardWindow(QMainWindow):
             position=position,
             kind="hover_hold",
             config={
-                "up": "W",
-                "down": "S",
-                "left": "A",
-                "right": "D",
+                "up": "w",
+                "down": "s",
+                "left": "a",
+                "right": "d",
                 "center_label": "移动",
                 "activation_mode": VirtualKeyWindow.ACTIVATION_HOVER_HOLD,
                 "hold_behavior": VirtualKeyWindow.HOLD_BEHAVIOR_TRUE,
@@ -203,7 +205,16 @@ class KeyboardWindow(QMainWindow):
             self.config_panel.update_widget(widget)
 
     def toggle_edit_mode(self) -> None:
-        self.edit_mode = not self.edit_mode
+        self._set_edit_mode(not self.edit_mode)
+
+    def _set_edit_mode(self, enabled: bool) -> None:
+        if self._configuration_visible:
+            enabled = True
+        elif enabled:
+            enabled = False
+        if self.edit_mode == enabled:
+            return
+        self.edit_mode = enabled
         if self.toggle_edit_action:
             self.toggle_edit_action.blockSignals(True)
             self.toggle_edit_action.setChecked(self.edit_mode)
@@ -293,6 +304,11 @@ class KeyboardWindow(QMainWindow):
         return snapped
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if not self._force_exit and self.tray_icon and self.tray_icon.isVisible():
+            self.save_layout()
+            event.ignore()
+            self._set_configuration_visible(False)
+            return
         self.save_layout()
         for widget in list(self.keys):
             widget.close()
@@ -322,6 +338,9 @@ class KeyboardWindow(QMainWindow):
         widget.raise_()
         self.keys.append(widget)
         widget.on_configuration_visibility_changed(self._configuration_visible)
+        if self.edit_mode:
+            widget.on_edit_mode_changed()
+            widget.update_style()
         if refresh and self.config_panel:
             self.config_panel.refresh_keys(select=widget)
             self.config_panel.update_toggle_button_state()
@@ -346,7 +365,7 @@ class KeyboardWindow(QMainWindow):
         hide_action = QAction("隐藏面板", self)
         hide_action.triggered.connect(lambda: self._set_configuration_visible(False))
         exit_action = QAction("退出程序", self)
-        exit_action.triggered.connect(self.close)
+        exit_action.triggered.connect(self.request_exit)
 
         menu.addAction(show_action)
         menu.addAction(hide_action)
@@ -389,6 +408,14 @@ class KeyboardWindow(QMainWindow):
         for widget in self.keys:
             widget.on_configuration_visibility_changed(self._configuration_visible)
         self._update_tray_menu_state()
+        self._sync_edit_mode_with_visibility()
+
+    def _sync_edit_mode_with_visibility(self) -> None:
+        self._set_edit_mode(self._configuration_visible)
+
+    def request_exit(self) -> None:
+        self._force_exit = True
+        self.close()
 
 
 def _resolve_tray_icon_path() -> Optional[str]:

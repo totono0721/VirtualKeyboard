@@ -37,7 +37,7 @@ class KeyDefinition:
         config = dict(config_payload) if isinstance(config_payload, dict) else {}
         return KeyDefinition(
             label=str(payload.get("label", "?")),
-            sequence=str(payload.get("sequence", "A")),
+            sequence=str(payload.get("sequence", "a")),
             locked=bool(payload.get("locked", False)),
             position=point,
             kind=kind,

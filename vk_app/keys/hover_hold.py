@@ -34,19 +34,24 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
         self._highlight_region: Optional[str] = None
         self._engaged_region: Optional[str] = None
         self._hover_once_region: Optional[str] = None
+        self._flash_region: Optional[str] = None
 
     def _build_paths(self) -> Dict[str, QPainterPath]:
         paths: Dict[str, QPainterPath] = {}
         width = float(self.width())
         height = float(self.height())
         margin = 10.0
-        center_size = min(width, height) / 2.5
+        center_size = min(width, height) * 0.38
         left = margin
         right = width - margin
         top = margin
         bottom = height - margin
         cx = width / 2.0
         cy = height / 2.0
+        inner_left = cx - center_size / 2.0
+        inner_right = cx + center_size / 2.0
+        inner_top = cy - center_size / 2.0
+        inner_bottom = cy + center_size / 2.0
 
         def polygon(points: list[tuple[float, float]]) -> QPainterPath:
             path = QPainterPath()
@@ -61,42 +66,42 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
 
         paths["center"] = polygon(
             [
-                (cx - center_size / 2, cy - center_size / 2),
-                (cx + center_size / 2, cy - center_size / 2),
-                (cx + center_size / 2, cy + center_size / 2),
-                (cx - center_size / 2, cy + center_size / 2),
+                (inner_left, inner_top),
+                (inner_right, inner_top),
+                (inner_right, inner_bottom),
+                (inner_left, inner_bottom),
             ]
         )
         paths["up"] = polygon(
             [
-                (0.0, 0.0),
-                (width, 0.0),
-                (right, top),
                 (left, top),
+                (right, top),
+                (inner_right, inner_top),
+                (inner_left, inner_top),
             ]
         )
         paths["down"] = polygon(
             [
-                (left, bottom),
+                (inner_left, inner_bottom),
+                (inner_right, inner_bottom),
                 (right, bottom),
-                (width, height),
-                (0.0, height),
+                (left, bottom),
             ]
         )
         paths["left"] = polygon(
             [
-                (0.0, 0.0),
                 (left, top),
+                (inner_left, inner_top),
+                (inner_left, inner_bottom),
                 (left, bottom),
-                (0.0, height),
             ]
         )
         paths["right"] = polygon(
             [
+                (inner_right, inner_top),
                 (right, top),
-                (width, 0.0),
-                (width, height),
                 (right, bottom),
+                (inner_right, inner_bottom),
             ]
         )
         return paths
@@ -142,9 +147,19 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
         }
 
         lighten_factor = 120
+        active_regions = {
+            region
+            for region in (
+                self._highlight_region,
+                self._engaged_region,
+                self._flash_region,
+            )
+            if region
+        }
+
         for region, path in self._paths.items():
             fill_color = colors.get(region, QColor("#5f5f5f"))
-            if region == self._highlight_region:
+            if region in active_regions:
                 fill_color = QColor(fill_color).lighter(lighten_factor)
             painter.setBrush(fill_color)
             painter.drawPath(path)
@@ -208,7 +223,7 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
     def contextMenuEvent(self, event) -> None:  # type: ignore[override]
         menu = QMenu(self)
         edit_action = menu.addAction("在配置窗口中编辑…")
-        lock_text = "取消锁定" if self.definition.locked else "锁定按键"
+        lock_text = "允许拖动" if self.definition.locked else "禁止拖动"
         lock_action = menu.addAction(lock_text)
         menu.addSeparator()
         delete_action = menu.addAction("删除")
@@ -298,7 +313,7 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
         else:
             self._hover_once_region = None
         if self._send_sequence_once(sequence):
-            self._flash_activation_feedback()
+            self._flash_activation_feedback(region)
             self._register_activity()
 
     def _start_region_hold(self, region: Optional[str]) -> None:
@@ -315,8 +330,28 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
         self._start_hold_sequence(sequence)
         if self._hold_sequence == sequence:
             self._engaged_region = region
+            self._flash_region = region
+            self.update()
 
     def _stop_region_hold(self) -> None:
         self._engaged_region = None
         self._hover_once_region = None
         self._stop_hold_sequence()
+        self._flash_region = None
+        self.update()
+
+    def _flash_activation_feedback(self, region: Optional[str] = None) -> None:  # type: ignore[override]
+        if self._hold_sequence:
+            return
+        valid_region = region if region in {"up", "down", "left", "right"} else None
+        self._flash_region = valid_region
+        self.update()
+        self._flash_timer.start(160)
+        self._register_activity()
+
+    def _clear_flash_if_idle(self) -> None:  # type: ignore[override]
+        if self._hold_sequence:
+            return
+        self._flash_region = None
+        self.update()
+        self._schedule_idle_check()
