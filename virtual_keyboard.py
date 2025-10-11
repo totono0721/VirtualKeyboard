@@ -14,7 +14,6 @@ from PyQt6.QtGui import QAction, QColor, QFont, QMouseEvent, QPainter, QPen
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
-    QFrame,
     QInputDialog,
     QMainWindow,
     QMenu,
@@ -27,8 +26,8 @@ if sys.platform != "win32":
     raise SystemExit("This application must be run on Windows.")
 
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 
 class KEYBDINPUT(ctypes.Structure):
@@ -56,6 +55,19 @@ user32.AttachThreadInput.argtypes = (wintypes.DWORD, wintypes.DWORD, wintypes.BO
 user32.AttachThreadInput.restype = wintypes.BOOL
 user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.IsChild.argtypes = (wintypes.HWND, wintypes.HWND)
+user32.IsChild.restype = wintypes.BOOL
+user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
+user32.SetForegroundWindow.restype = wintypes.BOOL
+user32.keybd_event.argtypes = (
+    wintypes.BYTE,
+    wintypes.BYTE,
+    wintypes.DWORD,
+    wintypes.ULONG_PTR,
+)
+user32.keybd_event.restype = None
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 
 @dataclass
@@ -149,9 +161,23 @@ class KeySender:
             inputs.append(self._create_input(mod, is_keyup=True))
 
         array_type = INPUT * len(inputs)
-        sent = user32.SendInput(len(inputs), array_type(*inputs), ctypes.sizeof(INPUT))
-        if sent != len(inputs):
-            raise OSError("SendInput failed")
+        input_array = array_type(*inputs)
+        ctypes.set_last_error(0)
+        sent = user32.SendInput(
+            len(inputs),
+            input_array,
+            ctypes.sizeof(INPUT),
+        )
+        if sent == len(inputs):
+            return
+
+        error_code = ctypes.get_last_error()
+        if self._fallback_keybd_event(modifiers, vk):
+            return
+
+        if error_code:
+            raise ctypes.WinError(error_code)
+        raise OSError("SendInput failed without extended error information")
 
     def _create_input(self, vk: int, *, is_keyup: bool) -> INPUT:
         flags = 0x0002 if is_keyup else 0x0000
@@ -162,6 +188,18 @@ class KeySender:
 
     def _resolve_modifier(self, token: str) -> Optional[int]:
         return self.MODIFIERS.get(token.upper())
+
+    def _fallback_keybd_event(self, modifiers: Sequence[int], vk: int) -> bool:
+        try:
+            for mod in modifiers:
+                user32.keybd_event(mod, 0, 0, 0)
+            user32.keybd_event(vk, 0, 0, 0)
+            user32.keybd_event(vk, 0, 0x0002, 0)
+            for mod in reversed(modifiers):
+                user32.keybd_event(mod, 0, 0x0002, 0)
+            return True
+        except Exception:
+            return False
 
     def _resolve_key(self, token: str) -> Tuple[int, List[int]]:
         token_upper = token.upper()
@@ -233,12 +271,12 @@ class FocusKeeper:
         self._foreground_hwnd = hwnd
 
 
-class VirtualKeyWidget(QFrame):
+class VirtualKeyWindow(QWidget):
     SIZE = 80
     BORDER_RADIUS = 8
 
     def __init__(self, definition: KeyDefinition, keyboard: "KeyboardWindow") -> None:
-        super().__init__(keyboard.canvas)
+        super().__init__(None)
         self.definition = definition
         self.keyboard = keyboard
         self.drag_active = False
@@ -250,6 +288,14 @@ class VirtualKeyWidget(QFrame):
         self.setFixedSize(self.SIZE, self.SIZE)
         self.move(definition.position)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
         self.update_style()
         keyboard.focus_keeper.register_widget(self)
 
@@ -340,14 +386,6 @@ class VirtualKeyWidget(QFrame):
             self.definition.sequence = sequence
 
 
-class CanvasWidget(QWidget):
-    def __init__(self, parent: "KeyboardWindow") -> None:
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(parent.show_background_menu)
-
-
 class KeyboardWindow(QMainWindow):
     SNAP_DISTANCE = 15
 
@@ -357,15 +395,13 @@ class KeyboardWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-
-        self.canvas = CanvasWidget(self)
-        self.setCentralWidget(self.canvas)
+        self.setCentralWidget(QWidget(self))
 
         self.key_sender = KeySender()
         self.focus_keeper = FocusKeeper(self)
         self.edit_mode = False
         self.toggle_edit_action: Optional[QAction] = None
-        self.keys: List[VirtualKeyWidget] = []
+        self.keys: List[VirtualKeyWindow] = []
         self.layout_path = os.path.join(os.path.dirname(__file__), "layout.json")
 
         self._setup_actions()
@@ -405,32 +441,22 @@ class KeyboardWindow(QMainWindow):
 
         self.statusBar().showMessage("按 Ctrl+E 进入编辑模式，Ctrl+N 新建按键")
 
-    def show_background_menu(self, pos: QPoint) -> None:
-        global_pos = self.canvas.mapToGlobal(pos)
-        menu = QMenu(self)
-        add_action = menu.addAction("新增按键")
-        toggle_action = menu.addAction("切换编辑模式")
-        action = menu.exec(global_pos)
-        if action == add_action:
-            self.add_key()
-        elif action == toggle_action:
-            self.toggle_edit_mode(not self.edit_mode)
-
     # endregion
 
     def add_key(self) -> None:
         index = len(self.keys)
         position = QPoint(50 + (index % 5) * 90, 50 + (index // 5) * 90)
         definition = KeyDefinition(label="A", sequence="A", position=position)
-        widget = VirtualKeyWidget(definition, self)
+        widget = VirtualKeyWindow(definition, self)
         widget.show()
+        widget.raise_()
         self.keys.append(widget)
 
-    def remove_key(self, widget: VirtualKeyWidget) -> None:
+    def remove_key(self, widget: VirtualKeyWindow) -> None:
         if widget in self.keys:
             self.keys.remove(widget)
             self.focus_keeper.unregister_widget(widget)
-            widget.setParent(None)
+            widget.close()
             widget.deleteLater()
 
     def toggle_edit_mode(self, checked: Optional[bool] = None) -> None:
@@ -445,12 +471,16 @@ class KeyboardWindow(QMainWindow):
         for widget in self.keys:
             widget.update_style()
 
-    def handle_key_trigger(self, widget: VirtualKeyWidget) -> None:
+    def handle_key_trigger(self, widget: VirtualKeyWindow) -> None:
         try:
             self.focus_keeper.restore_focus()
             self.key_sender.send_sequence(widget.definition.sequence)
-        except Exception as exc:  # pragma: no cover
-            QMessageBox.critical(self, "发送失败", str(exc))
+        except OSError as exc:  # pragma: no cover
+            if getattr(exc, "winerror", None) == 5:
+                message = "权限不足：请以管理员身份运行或确保目标窗口未提升权限。"
+            else:
+                message = str(exc)
+            QMessageBox.critical(self, "发送失败", message)
 
     # region Layout persistence
     def save_layout(self) -> None:
@@ -484,13 +514,14 @@ class KeyboardWindow(QMainWindow):
 
         for item in payload:
             definition = KeyDefinition.from_dict(item)
-            widget = VirtualKeyWidget(definition, self)
+            widget = VirtualKeyWindow(definition, self)
             widget.show()
+            widget.raise_()
             self.keys.append(widget)
 
     # endregion
 
-    def snap_position(self, moving: VirtualKeyWidget, proposed: QPoint) -> QPoint:
+    def snap_position(self, moving: VirtualKeyWindow, proposed: QPoint) -> QPoint:
         snapped = QPoint(proposed)
         moving_rect = QRect(snapped, moving.size())
         for widget in self.keys:
@@ -522,6 +553,10 @@ class KeyboardWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.save_layout()
+        for widget in list(self.keys):
+            self.focus_keeper.unregister_widget(widget)
+            widget.close()
+        self.keys.clear()
         super().closeEvent(event)
 
 
