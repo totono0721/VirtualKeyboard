@@ -62,7 +62,7 @@ class ConfigurationPanel(QWidget):
         self.add_button.clicked.connect(self.keyboard.add_key)
         operations_layout.addWidget(self.add_button)
 
-        self.toggle_edit_button = QPushButton("切换编辑模式 (Ctrl+E)")
+        self.toggle_edit_button = QPushButton("拖动调整模式 (自动启用)")
         self.toggle_edit_button.setCheckable(True)
         self.toggle_edit_button.clicked.connect(self.keyboard.toggle_edit_mode)
         operations_layout.addWidget(self.toggle_edit_button)
@@ -74,6 +74,10 @@ class ConfigurationPanel(QWidget):
         self.load_button = QPushButton("加载布局 (Ctrl+O)")
         self.load_button.clicked.connect(self.keyboard.load_layout_from_dialog)
         operations_layout.addWidget(self.load_button)
+
+        self.exit_button = QPushButton("退出程序")
+        self.exit_button.clicked.connect(self.keyboard.request_exit)
+        operations_layout.addWidget(self.exit_button)
 
         operations_layout.addStretch(1)
         layout.addLayout(operations_layout)
@@ -135,15 +139,20 @@ class ConfigurationPanel(QWidget):
         self.normal_auto_hide_delay = self._create_auto_hide_spin()
         self.normal_auto_hide_delay.valueChanged.connect(self._on_normal_auto_hide_delay_changed)
         normal_form.addRow("隐去延迟 (毫秒)", self.normal_auto_hide_delay)
+        self.normal_auto_hide_opacity = self._create_opacity_spin()
+        self.normal_auto_hide_opacity.valueChanged.connect(
+            self._on_normal_auto_hide_opacity_changed
+        )
+        normal_form.addRow("隐去后不透明度 (%)", self.normal_auto_hide_opacity)
         self.normal_x_spin = self._create_spin_box()
         self.normal_x_spin.valueChanged.connect(self._on_normal_position_changed)
         normal_form.addRow("X 坐标", self.normal_x_spin)
         self.normal_y_spin = self._create_spin_box()
         self.normal_y_spin.valueChanged.connect(self._on_normal_position_changed)
         normal_form.addRow("Y 坐标", self.normal_y_spin)
-        self.normal_locked = QCheckBox("锁定该按键")
+        self.normal_locked = QCheckBox("禁止拖动该按键")
         self.normal_locked.toggled.connect(self._on_normal_locked_changed)
-        normal_form.addRow("锁定", self.normal_locked)
+        normal_form.addRow("拖动锁定", self.normal_locked)
         self.form_stack.addWidget(self.normal_page)
 
         self.toggle_page = QWidget()
@@ -168,15 +177,20 @@ class ConfigurationPanel(QWidget):
         self.toggle_auto_hide_delay = self._create_auto_hide_spin()
         self.toggle_auto_hide_delay.valueChanged.connect(self._on_toggle_auto_hide_delay_changed)
         toggle_form.addRow("隐去延迟 (毫秒)", self.toggle_auto_hide_delay)
+        self.toggle_auto_hide_opacity = self._create_opacity_spin()
+        self.toggle_auto_hide_opacity.valueChanged.connect(
+            self._on_toggle_auto_hide_opacity_changed
+        )
+        toggle_form.addRow("隐去后不透明度 (%)", self.toggle_auto_hide_opacity)
         self.toggle_x_spin = self._create_spin_box()
         self.toggle_x_spin.valueChanged.connect(self._on_toggle_position_changed)
         toggle_form.addRow("X 坐标", self.toggle_x_spin)
         self.toggle_y_spin = self._create_spin_box()
         self.toggle_y_spin.valueChanged.connect(self._on_toggle_position_changed)
         toggle_form.addRow("Y 坐标", self.toggle_y_spin)
-        self.toggle_locked = QCheckBox("锁定该按键")
+        self.toggle_locked = QCheckBox("禁止拖动该按键")
         self.toggle_locked.toggled.connect(self._on_toggle_locked_changed)
-        toggle_form.addRow("锁定", self.toggle_locked)
+        toggle_form.addRow("拖动锁定", self.toggle_locked)
         self.form_stack.addWidget(self.toggle_page)
 
         self.hover_page = QWidget()
@@ -222,15 +236,20 @@ class ConfigurationPanel(QWidget):
         self.hover_auto_hide_delay = self._create_auto_hide_spin()
         self.hover_auto_hide_delay.valueChanged.connect(self._on_hover_auto_hide_delay_changed)
         hover_form.addRow("隐去延迟 (毫秒)", self.hover_auto_hide_delay)
+        self.hover_auto_hide_opacity = self._create_opacity_spin()
+        self.hover_auto_hide_opacity.valueChanged.connect(
+            self._on_hover_auto_hide_opacity_changed
+        )
+        hover_form.addRow("隐去后不透明度 (%)", self.hover_auto_hide_opacity)
         self.hover_x_spin = self._create_spin_box()
         self.hover_x_spin.valueChanged.connect(self._on_hover_position_changed)
         hover_form.addRow("X 坐标", self.hover_x_spin)
         self.hover_y_spin = self._create_spin_box()
         self.hover_y_spin.valueChanged.connect(self._on_hover_position_changed)
         hover_form.addRow("Y 坐标", self.hover_y_spin)
-        self.hover_locked = QCheckBox("锁定该按键")
+        self.hover_locked = QCheckBox("禁止拖动该按键")
         self.hover_locked.toggled.connect(self._on_hover_locked_changed)
-        hover_form.addRow("锁定", self.hover_locked)
+        hover_form.addRow("拖动锁定", self.hover_locked)
         self.form_stack.addWidget(self.hover_page)
 
         detail_layout.addWidget(self.form_stack)
@@ -272,6 +291,13 @@ class ConfigurationPanel(QWidget):
         spin = QSpinBox()
         spin.setRange(500, 600000)
         spin.setSingleStep(500)
+        return spin
+
+    def _create_opacity_spin(self) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(0, 100)
+        spin.setSingleStep(5)
+        spin.setSuffix(" %")
         return spin
 
     def _select_combo_value(self, combo: QComboBox, value: str) -> None:
@@ -338,6 +364,7 @@ class ConfigurationPanel(QWidget):
         self.toggle_edit_button.blockSignals(True)
         self.toggle_edit_button.setChecked(edit_mode)
         self.toggle_edit_button.blockSignals(False)
+        self.toggle_edit_button.setEnabled(self.keyboard.configuration_visible())
 
     def focus_on_widget(self, widget: VirtualKeyWindow) -> None:
         self.refresh_keys(select=widget)
@@ -392,7 +419,12 @@ class ConfigurationPanel(QWidget):
         auto_enabled = bool(widget.definition.config.get("auto_fade_enabled", False))
         self.normal_auto_hide_check.setChecked(auto_enabled)
         self.normal_auto_hide_delay.setValue(self._read_auto_hide_delay(widget))
-        self._update_auto_hide_widgets(self.normal_auto_hide_check, self.normal_auto_hide_delay)
+        self.normal_auto_hide_opacity.setValue(self._read_auto_hide_opacity(widget))
+        self._update_auto_hide_widgets(
+            self.normal_auto_hide_check,
+            self.normal_auto_hide_delay,
+            self.normal_auto_hide_opacity,
+        )
         self._update_hold_widgets(
             self.normal_activation_combo, self.normal_hold_combo, self.normal_repeat_spin
         )
@@ -418,7 +450,12 @@ class ConfigurationPanel(QWidget):
         auto_enabled = bool(widget.definition.config.get("auto_fade_enabled", False))
         self.toggle_auto_hide_check.setChecked(auto_enabled)
         self.toggle_auto_hide_delay.setValue(self._read_auto_hide_delay(widget))
-        self._update_auto_hide_widgets(self.toggle_auto_hide_check, self.toggle_auto_hide_delay)
+        self.toggle_auto_hide_opacity.setValue(self._read_auto_hide_opacity(widget))
+        self._update_auto_hide_widgets(
+            self.toggle_auto_hide_check,
+            self.toggle_auto_hide_delay,
+            self.toggle_auto_hide_opacity,
+        )
         self._update_hold_widgets(
             self.toggle_activation_combo, self.toggle_hold_combo, self.toggle_repeat_spin
         )
@@ -451,7 +488,12 @@ class ConfigurationPanel(QWidget):
         auto_enabled = bool(widget.definition.config.get("auto_fade_enabled", False))
         self.hover_auto_hide_check.setChecked(auto_enabled)
         self.hover_auto_hide_delay.setValue(self._read_auto_hide_delay(widget))
-        self._update_auto_hide_widgets(self.hover_auto_hide_check, self.hover_auto_hide_delay)
+        self.hover_auto_hide_opacity.setValue(self._read_auto_hide_opacity(widget))
+        self._update_auto_hide_widgets(
+            self.hover_auto_hide_check,
+            self.hover_auto_hide_delay,
+            self.hover_auto_hide_opacity,
+        )
         self._update_hold_widgets(
             self.hover_activation_combo, self.hover_hold_combo, self.hover_repeat_spin
         )
@@ -518,13 +560,23 @@ class ConfigurationPanel(QWidget):
         if self._loading or not self.selected_widget:
             return
         self.selected_widget.definition.config["auto_fade_enabled"] = bool(checked)
-        self._update_auto_hide_widgets(self.normal_auto_hide_check, self.normal_auto_hide_delay)
+        self._update_auto_hide_widgets(
+            self.normal_auto_hide_check,
+            self.normal_auto_hide_delay,
+            self.normal_auto_hide_opacity,
+        )
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_normal_auto_hide_delay_changed(self, value: int) -> None:
         if self._loading or not self.selected_widget:
             return
         self.selected_widget.definition.config["auto_fade_delay_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_normal_auto_hide_opacity_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_min_opacity"] = int(value)
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_normal_position_changed(self, value: int) -> None:
@@ -577,13 +629,23 @@ class ConfigurationPanel(QWidget):
         if self._loading or not self.selected_widget:
             return
         self.selected_widget.definition.config["auto_fade_enabled"] = bool(checked)
-        self._update_auto_hide_widgets(self.toggle_auto_hide_check, self.toggle_auto_hide_delay)
+        self._update_auto_hide_widgets(
+            self.toggle_auto_hide_check,
+            self.toggle_auto_hide_delay,
+            self.toggle_auto_hide_opacity,
+        )
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_toggle_auto_hide_delay_changed(self, value: int) -> None:
         if self._loading or not self.selected_widget:
             return
         self.selected_widget.definition.config["auto_fade_delay_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_toggle_auto_hide_opacity_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_min_opacity"] = int(value)
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_toggle_position_changed(self, value: int) -> None:
@@ -662,13 +724,23 @@ class ConfigurationPanel(QWidget):
         if self._loading or not self.selected_widget:
             return
         self.selected_widget.definition.config["auto_fade_enabled"] = bool(checked)
-        self._update_auto_hide_widgets(self.hover_auto_hide_check, self.hover_auto_hide_delay)
+        self._update_auto_hide_widgets(
+            self.hover_auto_hide_check,
+            self.hover_auto_hide_delay,
+            self.hover_auto_hide_opacity,
+        )
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_hover_auto_hide_delay_changed(self, value: int) -> None:
         if self._loading or not self.selected_widget:
             return
         self.selected_widget.definition.config["auto_fade_delay_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_hover_auto_hide_opacity_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_min_opacity"] = int(value)
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _apply_position(self, point: QPoint) -> None:
@@ -700,8 +772,9 @@ class ConfigurationPanel(QWidget):
         self.keyboard.notify_key_changed(self.selected_widget)
         self._update_control_buttons()
 
-    def _update_auto_hide_widgets(self, checkbox: QCheckBox, spin: QSpinBox) -> None:
-        spin.setEnabled(checkbox.isChecked())
+    def _update_auto_hide_widgets(self, checkbox: QCheckBox, *widgets) -> None:
+        for widget in widgets:
+            widget.setEnabled(checkbox.isChecked())
 
     def _read_auto_hide_delay(self, widget: VirtualKeyWindow) -> int:
         raw = widget.definition.config.get(
@@ -712,6 +785,16 @@ class ConfigurationPanel(QWidget):
         except (TypeError, ValueError):
             value = VirtualKeyWindow.DEFAULT_AUTO_FADE_DELAY_MS
         return max(500, value)
+
+    def _read_auto_hide_opacity(self, widget: VirtualKeyWindow) -> int:
+        raw = widget.definition.config.get(
+            "auto_fade_min_opacity", int(VirtualKeyWindow.FADE_MIN_OPACITY * 100)
+        )
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = VirtualKeyWindow.FADE_MIN_OPACITY * 100
+        return int(max(0.0, min(100.0, value)))
 
     def _update_control_buttons(self) -> None:
         has_selection = self.selected_widget is not None
