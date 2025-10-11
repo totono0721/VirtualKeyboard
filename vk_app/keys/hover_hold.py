@@ -76,35 +76,31 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
             [
                 (left, top),
                 (right, top),
-                (right, inner_top),
                 (inner_right, inner_top),
                 (inner_left, inner_top),
-                (left, inner_top),
             ]
         )
         paths["down"] = polygon(
             [
-                (left, inner_bottom),
                 (inner_left, inner_bottom),
                 (inner_right, inner_bottom),
-                (right, inner_bottom),
                 (right, bottom),
                 (left, bottom),
             ]
         )
         paths["left"] = polygon(
             [
-                (left, inner_top),
+                (left, top),
                 (inner_left, inner_top),
                 (inner_left, inner_bottom),
-                (left, inner_bottom),
+                (left, bottom),
             ]
         )
         paths["right"] = polygon(
             [
                 (inner_right, inner_top),
-                (right, inner_top),
-                (right, inner_bottom),
+                (right, top),
+                (right, bottom),
                 (inner_right, inner_bottom),
             ]
         )
