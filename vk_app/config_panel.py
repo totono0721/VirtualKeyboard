@@ -1,7 +1,8 @@
 """Configuration panel for managing virtual keys."""
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from functools import partial
+from typing import Callable, Optional, TYPE_CHECKING
 
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtWidgets import (
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QStackedWidget,
@@ -120,7 +122,11 @@ class ConfigurationPanel(QWidget):
         self.normal_label_edit.textChanged.connect(self._on_normal_label_changed)
         normal_form.addRow("显示文本", self.normal_label_edit)
         self.normal_sequence_edit = QLineEdit()
-        self.normal_sequence_edit.textChanged.connect(self._on_normal_sequence_changed)
+        self._bind_sequence_field(
+            self.normal_sequence_edit,
+            getter=self._get_current_normal_sequence,
+            setter=self._set_normal_sequence,
+        )
         normal_form.addRow("输出内容", self.normal_sequence_edit)
         self.normal_activation_combo = self._create_activation_combo()
         self.normal_activation_combo.currentIndexChanged.connect(
@@ -202,21 +208,31 @@ class ConfigurationPanel(QWidget):
         self.hover_center_label_edit.textChanged.connect(self._on_hover_center_label_changed)
         hover_form.addRow("中心显示文本", self.hover_center_label_edit)
         self.hover_up_edit = QLineEdit()
-        self.hover_up_edit.textChanged.connect(lambda text: self._on_hover_sequence_changed("up", text))
+        self._bind_sequence_field(
+            self.hover_up_edit,
+            getter=partial(self._get_hover_sequence, "up"),
+            setter=partial(self._set_hover_sequence, "up"),
+        )
         hover_form.addRow("上方输出", self.hover_up_edit)
         self.hover_down_edit = QLineEdit()
-        self.hover_down_edit.textChanged.connect(
-            lambda text: self._on_hover_sequence_changed("down", text)
+        self._bind_sequence_field(
+            self.hover_down_edit,
+            getter=partial(self._get_hover_sequence, "down"),
+            setter=partial(self._set_hover_sequence, "down"),
         )
         hover_form.addRow("下方输出", self.hover_down_edit)
         self.hover_left_edit = QLineEdit()
-        self.hover_left_edit.textChanged.connect(
-            lambda text: self._on_hover_sequence_changed("left", text)
+        self._bind_sequence_field(
+            self.hover_left_edit,
+            getter=partial(self._get_hover_sequence, "left"),
+            setter=partial(self._set_hover_sequence, "left"),
         )
         hover_form.addRow("左侧输出", self.hover_left_edit)
         self.hover_right_edit = QLineEdit()
-        self.hover_right_edit.textChanged.connect(
-            lambda text: self._on_hover_sequence_changed("right", text)
+        self._bind_sequence_field(
+            self.hover_right_edit,
+            getter=partial(self._get_hover_sequence, "right"),
+            setter=partial(self._set_hover_sequence, "right"),
         )
         hover_form.addRow("右侧输出", self.hover_right_edit)
         self.hover_activation_combo = self._create_activation_combo()
@@ -299,6 +315,119 @@ class ConfigurationPanel(QWidget):
         spin.setSingleStep(5)
         spin.setSuffix(" %")
         return spin
+
+    def _bind_sequence_field(
+        self,
+        line_edit: QLineEdit,
+        *,
+        getter: Callable[[], str],
+        setter: Callable[[str], None],
+    ) -> None:
+        line_edit.setProperty("_last_valid_sequence", "")
+        line_edit.editingFinished.connect(
+            lambda le=line_edit, get=getter, set_value=setter: self._commit_sequence_field(
+                le, get, set_value
+            )
+        )
+
+    def _commit_sequence_field(
+        self,
+        line_edit: QLineEdit,
+        getter: Callable[[], str],
+        setter: Callable[[str], None],
+    ) -> None:
+        if self._loading or not self.selected_widget:
+            return
+
+        raw_text = line_edit.text()
+        text = raw_text.strip()
+        current_value = getter() or ""
+        fallback = line_edit.property("_last_valid_sequence")
+        fallback_text = fallback if isinstance(fallback, str) else current_value
+
+        if not text:
+            if current_value:
+                setter("")
+                self.keyboard.notify_key_changed(self.selected_widget)
+            if raw_text:
+                self._set_line_edit_text(line_edit, "")
+            line_edit.setProperty("_last_valid_sequence", "")
+            return
+
+        if raw_text.rstrip().endswith("+"):
+            self._show_sequence_error("请在“+”后继续填写按键。")
+            if raw_text != fallback_text:
+                self._set_line_edit_text(line_edit, fallback_text)
+            if current_value != fallback_text:
+                setter(fallback_text)
+                self.keyboard.notify_key_changed(self.selected_widget)
+            line_edit.setProperty("_last_valid_sequence", fallback_text)
+            return
+
+        try:
+            normalized = self.keyboard.key_sender.normalize_sequence(text)
+        except ValueError as exc:  # pragma: no cover - UI feedback path
+            self._show_sequence_error(str(exc))
+            if raw_text != fallback_text:
+                self._set_line_edit_text(line_edit, fallback_text)
+            if current_value != fallback_text:
+                setter(fallback_text)
+                self.keyboard.notify_key_changed(self.selected_widget)
+            line_edit.setProperty("_last_valid_sequence", fallback_text)
+            return
+
+        if normalized != raw_text:
+            self._set_line_edit_text(line_edit, normalized)
+        if current_value != normalized:
+            setter(normalized)
+            self.keyboard.notify_key_changed(self.selected_widget)
+        line_edit.setProperty("_last_valid_sequence", normalized)
+
+    def _set_line_edit_text(self, line_edit: QLineEdit, text: str) -> None:
+        previous = line_edit.blockSignals(True)
+        line_edit.setText(text)
+        line_edit.setCursorPosition(len(text))
+        line_edit.blockSignals(previous)
+
+    def _initialize_sequence_field(self, line_edit: QLineEdit, value: Optional[str]) -> None:
+        raw_text = value if isinstance(value, str) else (str(value) if value else "")
+        text = raw_text.strip()
+        if not text:
+            self._set_line_edit_text(line_edit, "")
+            line_edit.setProperty("_last_valid_sequence", "")
+            return
+        try:
+            normalized = self.keyboard.key_sender.normalize_sequence(text)
+        except ValueError:
+            self._set_line_edit_text(line_edit, raw_text)
+            line_edit.setProperty("_last_valid_sequence", "")
+            return
+        self._set_line_edit_text(line_edit, normalized)
+        line_edit.setProperty("_last_valid_sequence", normalized)
+
+    def _show_sequence_error(self, detail: str) -> None:
+        QMessageBox.warning(self, "无效输出内容", f"无法解析输入：{detail}")
+
+    def _get_current_normal_sequence(self) -> str:
+        if not self.selected_widget:
+            return ""
+        return self.selected_widget.definition.sequence or ""
+
+    def _set_normal_sequence(self, value: str) -> None:
+        if not self.selected_widget:
+            return
+        self.selected_widget.definition.sequence = value
+
+    def _get_hover_sequence(self, direction: str) -> str:
+        if not self.selected_widget:
+            return ""
+        raw = self.selected_widget.definition.config.get(direction, "")
+        return str(raw) if raw is not None else ""
+
+    def _set_hover_sequence(self, direction: str, value: str) -> None:
+        if not self.selected_widget:
+            return
+        self.selected_widget.definition.config[direction] = value
 
     def _select_combo_value(self, combo: QComboBox, value: str) -> None:
         for index in range(combo.count()):
@@ -400,7 +529,9 @@ class ConfigurationPanel(QWidget):
     def _load_normal_widget(self, widget: VirtualKeyWindow) -> None:
         self.form_stack.setCurrentIndex(self.NORMAL_INDEX)
         self.normal_label_edit.setText(widget.definition.label)
-        self.normal_sequence_edit.setText(widget.definition.sequence)
+        self._initialize_sequence_field(
+            self.normal_sequence_edit, widget.definition.sequence
+        )
         position = widget.definition.position
         self.normal_x_spin.setValue(int(position.x()))
         self.normal_y_spin.setValue(int(position.y()))
@@ -466,10 +597,18 @@ class ConfigurationPanel(QWidget):
         self.hover_center_label_edit.setText(
             str(widget.definition.config.get("center_label", widget.definition.label))
         )
-        self.hover_up_edit.setText(str(widget.definition.config.get("up", "")))
-        self.hover_down_edit.setText(str(widget.definition.config.get("down", "")))
-        self.hover_left_edit.setText(str(widget.definition.config.get("left", "")))
-        self.hover_right_edit.setText(str(widget.definition.config.get("right", "")))
+        self._initialize_sequence_field(
+            self.hover_up_edit, widget.definition.config.get("up", "")
+        )
+        self._initialize_sequence_field(
+            self.hover_down_edit, widget.definition.config.get("down", "")
+        )
+        self._initialize_sequence_field(
+            self.hover_left_edit, widget.definition.config.get("left", "")
+        )
+        self._initialize_sequence_field(
+            self.hover_right_edit, widget.definition.config.get("right", "")
+        )
         position = widget.definition.position
         self.hover_x_spin.setValue(int(position.x()))
         self.hover_y_spin.setValue(int(position.y()))
@@ -522,12 +661,6 @@ class ConfigurationPanel(QWidget):
             return
         self.selected_widget.definition.label = text
         self.selected_widget.update()
-        self.keyboard.notify_key_changed(self.selected_widget)
-
-    def _on_normal_sequence_changed(self, text: str) -> None:
-        if self._loading or not self.selected_widget:
-            return
-        self.selected_widget.definition.sequence = text
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_normal_activation_changed(self, index: int) -> None:
@@ -673,12 +806,6 @@ class ConfigurationPanel(QWidget):
             return
         self.selected_widget.definition.config["center_label"] = text
         self.selected_widget.update()
-        self.keyboard.notify_key_changed(self.selected_widget)
-
-    def _on_hover_sequence_changed(self, direction: str, text: str) -> None:
-        if self._loading or not self.selected_widget:
-            return
-        self.selected_widget.definition.config[direction] = text
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_hover_position_changed(self, value: int) -> None:
