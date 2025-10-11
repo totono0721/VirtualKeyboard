@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtGui import QAction
@@ -36,6 +36,7 @@ class KeyboardWindow(QMainWindow):
         self.keys: List[VirtualKeyWindow] = []
         self.layout_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "layout.json"))
         self.config_panel: Optional[ConfigurationPanel] = None
+        self._configuration_visible = True
 
         self._setup_actions()
         self.config_panel = ConfigurationPanel(self)
@@ -82,13 +83,30 @@ class KeyboardWindow(QMainWindow):
     def add_key(self) -> None:
         index = len(self.keys)
         position = QPoint(50 + (index % 5) * 90, 50 + (index // 5) * 90)
-        definition = KeyDefinition(label="A", sequence="A", position=position)
+        definition = KeyDefinition(
+            label="A",
+            sequence="A",
+            position=position,
+            config={
+                "activation_mode": VirtualKeyWindow.ACTIVATION_CLICK_ONCE,
+                "hold_behavior": VirtualKeyWindow.HOLD_BEHAVIOR_TRUE,
+                "repeat_interval_ms": VirtualKeyWindow.DEFAULT_REPEAT_INTERVAL_MS,
+            },
+        )
         self._create_key_widget(definition)
 
     def add_toggle_key(self) -> None:
         position = QPoint(50, 50)
         definition = KeyDefinition(
-            label="配置", sequence="", position=position, kind="toggle_config"
+            label="配置",
+            sequence="",
+            position=position,
+            kind="toggle_config",
+            config={
+                "activation_mode": VirtualKeyWindow.ACTIVATION_CLICK_ONCE,
+                "hold_behavior": VirtualKeyWindow.HOLD_BEHAVIOR_TRUE,
+                "repeat_interval_ms": VirtualKeyWindow.DEFAULT_REPEAT_INTERVAL_MS,
+            },
         )
         self._create_key_widget(definition)
 
@@ -105,6 +123,9 @@ class KeyboardWindow(QMainWindow):
                 "left": "A",
                 "right": "D",
                 "center_label": "移动",
+                "activation_mode": VirtualKeyWindow.ACTIVATION_HOVER_HOLD,
+                "hold_behavior": VirtualKeyWindow.HOLD_BEHAVIOR_TRUE,
+                "repeat_interval_ms": VirtualKeyWindow.DEFAULT_REPEAT_INTERVAL_MS,
             },
         )
         self._create_key_widget(definition)
@@ -123,25 +144,59 @@ class KeyboardWindow(QMainWindow):
         if widget.definition.kind == "toggle_config":
             self.toggle_configuration_visibility()
             return
-        try:
-            self.focus_keeper.restore_focus()
-            self.key_sender.send_sequence(widget.definition.sequence)
-        except OSError as exc:  # pragma: no cover
-            if getattr(exc, "winerror", None) == 5:
-                message = "权限不足：请以管理员身份运行或确保目标窗口未提升权限。"
-            else:
-                message = str(exc)
-            QMessageBox.critical(self, "发送失败", message)
+        self.send_sequence_once(widget.definition.sequence)
 
     def toggle_configuration_visibility(self) -> None:
         if self.isVisible():
             self.hide()
+            self._configuration_visible = False
         else:
             self.show()
             self.raise_()
             self.activateWindow()
+            self._configuration_visible = True
+        for widget in self.keys:
+            widget.on_configuration_visibility_changed(self._configuration_visible)
+
+    def configuration_visible(self) -> bool:
+        return self._configuration_visible
+
+    def send_sequence_once(self, sequence: str) -> None:
+        text = sequence.strip()
+        if not text:
+            return
+        try:
+            self.focus_keeper.restore_focus()
+            self.key_sender.send_sequence(text)
+        except OSError as exc:  # pragma: no cover
+            self._show_send_error(exc)
+
+    def start_sequence_hold(self, sequence: str) -> Optional[Tuple[int, Tuple[int, ...]]]:
+        text = sequence.strip()
+        if not text:
+            return None
+        try:
+            self.focus_keeper.restore_focus()
+            return self.key_sender.press_hold(text)
+        except OSError as exc:  # pragma: no cover
+            self._show_send_error(exc)
+            return None
+
+    def stop_sequence_hold(self, combo: Tuple[int, Tuple[int, ...]]) -> None:
+        try:
+            self.key_sender.release_hold(combo)
+        except OSError as exc:  # pragma: no cover
+            self._show_send_error(exc)
+
+    def _show_send_error(self, exc: OSError) -> None:
+        if getattr(exc, "winerror", None) == 5:
+            message = "权限不足：请以管理员身份运行或确保目标窗口未提升权限。"
+        else:
+            message = str(exc)
+        QMessageBox.critical(self, "发送失败", message)
 
     def notify_key_changed(self, widget: VirtualKeyWindow) -> None:
+        widget.on_definition_changed()
         if self.config_panel:
             self.config_panel.update_widget(widget)
 
@@ -254,6 +309,7 @@ class KeyboardWindow(QMainWindow):
         widget.show()
         widget.raise_()
         self.keys.append(widget)
+        widget.on_configuration_visibility_changed(self._configuration_visible)
         if refresh and self.config_panel:
             self.config_panel.refresh_keys(select=widget)
             self.config_panel.update_toggle_button_state()

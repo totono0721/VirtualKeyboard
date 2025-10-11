@@ -96,7 +96,7 @@ class KeySender:
         if not events:
             return
 
-        inputs = [self._create_input(vk, is_keyup) for vk, is_keyup in events]
+        inputs = [self._create_input(vk, is_keyup=is_keyup) for vk, is_keyup in events]
         array_type = INPUT * len(inputs)
         input_array = array_type(*inputs)
         ctypes.set_last_error(0)

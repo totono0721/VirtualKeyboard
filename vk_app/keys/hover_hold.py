@@ -23,17 +23,17 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
     SIZE = 160
 
     def __init__(self, definition: KeyDefinition, keyboard) -> None:
+        definition.config.setdefault("activation_mode", self.ACTIVATION_HOVER_HOLD)
+        definition.config.setdefault("hold_behavior", self.HOLD_BEHAVIOR_TRUE)
+        definition.config.setdefault("repeat_interval_ms", self.DEFAULT_REPEAT_INTERVAL_MS)
         super().__init__(definition, keyboard)
         self.setFixedSize(self.SIZE, self.SIZE)
-        # Enable hover tracking so we receive mouseMoveEvent updates even when no
-        # button is pressed. Without this the directional areas would never
-        # detect the cursor entering them, so the configured press-hold
-        # shortcuts would not trigger.
-        self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self._active_region: Optional[str] = None
-        self._active_combo = None
+        self.setMouseTracking(True)
         self._paths = self._build_paths()
+        self._highlight_region: Optional[str] = None
+        self._engaged_region: Optional[str] = None
+        self._hover_once_region: Optional[str] = None
 
     def _build_paths(self) -> Dict[str, QPainterPath]:
         paths: Dict[str, QPainterPath] = {}
@@ -105,16 +105,33 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
         # Hover-based key does not trigger on click.
         pass
 
+    def on_definition_changed(self) -> None:
+        super().on_definition_changed()
+        self.setMouseTracking(True)
+        self._hover_once_region = None
+        self._update_region_highlight(None)
+
+    def _handle_hover_enter(self) -> None:
+        # Region-aware hover handling is managed via _handle_pointer_update.
+        return
+
+    def _handle_hover_leave(self) -> None:
+        self._hover_once_region = None
+        self._stop_region_hold()
+
     def on_edit_mode_changed(self) -> None:
-        self._release_active_combination()
+        super().on_edit_mode_changed()
+        self._engaged_region = None
+        self._hover_once_region = None
+        self._update_region_highlight(None)
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         border_color = QColor(self._border_color)
-        if self._active_region:
+        if self._highlight_region:
             border_color = border_color.lighter(135)
-        painter.setPen(QPen(border_color, 3 if self._active_region else 2))
+        painter.setPen(QPen(border_color, 3 if self._highlight_region else 2))
 
         colors = {
             "up": QColor("#2c7fb8"),
@@ -127,7 +144,7 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
         lighten_factor = 120
         for region, path in self._paths.items():
             fill_color = colors.get(region, QColor("#5f5f5f"))
-            if region == self._active_region:
+            if region == self._highlight_region:
                 fill_color = QColor(fill_color).lighter(lighten_factor)
             painter.setBrush(fill_color)
             painter.drawPath(path)
@@ -166,7 +183,9 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
             return
         if event.button() == Qt.MouseButton.LeftButton and not self.keyboard.edit_mode:
             region = self._resolve_region(event.position())
-            self._set_active_region(region)
+            if region:
+                self._register_activity()
+            self._handle_region_activation(region, from_hover=False)
             event.accept()
             return
         super().mousePressEvent(event)
@@ -174,14 +193,14 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         super().mouseMoveEvent(event)
         if self.keyboard.edit_mode:
-            self._set_active_region(None)
+            self._update_region_highlight(None)
             return
-        region = self._resolve_region(event.position())
-        self._set_active_region(region)
+        self._handle_pointer_update(event.position(), from_hover=True)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
         if event.button() == Qt.MouseButton.LeftButton and not self.keyboard.edit_mode:
-            self._set_active_region(None)
+            if self._activation_mode() in {self.ACTIVATION_CLICK_HOLD, self.ACTIVATION_HOVER_HOLD}:
+                self._stop_region_hold()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -204,27 +223,28 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
             self.keyboard.remove_key(self)
 
     def enterEvent(self, event) -> None:  # type: ignore[override]
-        if not self.keyboard.edit_mode:
-            self._set_active_region(None)
+        self._update_region_highlight(None)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # type: ignore[override]
-        self._set_active_region(None)
+        self._hover_once_region = None
+        self._update_region_highlight(None)
         super().leaveEvent(event)
 
     def event(self, event):  # type: ignore[override]
         if isinstance(event, QHoverEvent) and not self.keyboard.edit_mode:
             if event.type() in (QEvent.Type.HoverEnter, QEvent.Type.HoverMove):
-                region = self._resolve_region(event.position())
-                self._set_active_region(region)
+                self._handle_pointer_update(event.position(), from_hover=True)
                 return True
             if event.type() == QEvent.Type.HoverLeave:
-                self._set_active_region(None)
+                self._hover_once_region = None
+                self._update_region_highlight(None)
+                self._stop_region_hold()
                 return True
         return super().event(event)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        self._release_active_combination()
+        self._stop_region_hold()
         super().closeEvent(event)
 
     def _resolve_region(self, position: QPointF) -> Optional[str]:
@@ -233,29 +253,70 @@ class HoverHoldKeyWindow(VirtualKeyWindow):
                 return region
         return None
 
-    def _set_active_region(self, region: Optional[str]) -> None:
-        if region == self._active_region:
-            return
-        self._release_active_combination()
-        if region in {"up", "down", "left", "right"}:
-            sequence = str(self.definition.config.get(region, "")).strip()
-            if sequence:
-                try:
-                    combo = self.keyboard.key_sender.press_hold(sequence)
-                except Exception:
-                    combo = None
-                if combo:
-                    self._active_combo = combo
-                    self._active_region = region
+    def _handle_pointer_update(self, position: QPointF, *, from_hover: bool) -> None:
+        region = self._resolve_region(position)
+        self._update_region_highlight(region)
+        if region and not self.keyboard.edit_mode:
+            self._register_activity()
+        if from_hover:
+            mode = self._activation_mode()
+            if mode == self.ACTIVATION_HOVER_HOLD:
+                self._handle_region_activation(region, from_hover=True)
+            elif mode == self.ACTIVATION_HOVER_ONCE:
+                self._trigger_region_once(region, from_hover=True)
+
+    def _handle_region_activation(self, region: Optional[str], *, from_hover: bool) -> None:
+        mode = self._activation_mode()
+        if mode in {self.ACTIVATION_CLICK_ONCE, self.ACTIVATION_HOVER_ONCE}:
+            self._trigger_region_once(region, from_hover=from_hover)
+        elif mode in {self.ACTIVATION_CLICK_HOLD, self.ACTIVATION_HOVER_HOLD}:
+            if region in {"up", "down", "left", "right"}:
+                self._start_region_hold(region)
+            else:
+                self._stop_region_hold()
         else:
-            self._active_region = region
+            self._update_region_highlight(region)
+
+    def _update_region_highlight(self, region: Optional[str]) -> None:
+        if region == self._highlight_region:
+            return
+        self._highlight_region = region
         self.update()
 
-    def _release_active_combination(self) -> None:
-        if self._active_combo:
-            try:
-                self.keyboard.key_sender.release_hold(self._active_combo)
-            finally:
-                self._active_combo = None
-        self._active_region = None
-        self.update()
+    def _trigger_region_once(self, region: Optional[str], *, from_hover: bool) -> None:
+        if region not in {"up", "down", "left", "right"}:
+            if not from_hover:
+                self._stop_region_hold()
+            return
+        if from_hover and self._hover_once_region == region:
+            return
+        sequence = str(self.definition.config.get(region, "")).strip()
+        if not sequence:
+            return
+        if from_hover:
+            self._hover_once_region = region
+        else:
+            self._hover_once_region = None
+        if self._send_sequence_once(sequence):
+            self._flash_activation_feedback()
+            self._register_activity()
+
+    def _start_region_hold(self, region: Optional[str]) -> None:
+        if region not in {"up", "down", "left", "right"}:
+            self._stop_region_hold()
+            return
+        sequence = str(self.definition.config.get(region, "")).strip()
+        if not sequence:
+            self._stop_region_hold()
+            return
+        if self._engaged_region == region and self._hold_sequence == sequence:
+            return
+        self._stop_region_hold()
+        self._start_hold_sequence(sequence)
+        if self._hold_sequence == sequence:
+            self._engaged_region = region
+
+    def _stop_region_hold(self) -> None:
+        self._engaged_region = None
+        self._hover_once_region = None
+        self._stop_hold_sequence()

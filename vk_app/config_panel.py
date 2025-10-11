@@ -6,6 +6,7 @@ from typing import Optional, TYPE_CHECKING
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -30,6 +31,23 @@ class ConfigurationPanel(QWidget):
     NORMAL_INDEX = 1
     TOGGLE_INDEX = 2
     HOVER_INDEX = 3
+
+    ACTIVATION_OPTIONS = [
+        ("按下触发一次", VirtualKeyWindow.ACTIVATION_CLICK_ONCE),
+        ("按下保持按住", VirtualKeyWindow.ACTIVATION_CLICK_HOLD),
+        ("悬停保持按住", VirtualKeyWindow.ACTIVATION_HOVER_HOLD),
+        ("悬停触发一次", VirtualKeyWindow.ACTIVATION_HOVER_ONCE),
+    ]
+
+    HOLD_OPTIONS = [
+        ("持续按住", VirtualKeyWindow.HOLD_BEHAVIOR_TRUE),
+        ("定期重复按下", VirtualKeyWindow.HOLD_BEHAVIOR_REPEAT),
+    ]
+
+    HOLD_ACTIVATION_MODES = {
+        VirtualKeyWindow.ACTIVATION_CLICK_HOLD,
+        VirtualKeyWindow.ACTIVATION_HOVER_HOLD,
+    }
 
     def __init__(self, keyboard: "KeyboardWindow") -> None:
         super().__init__(keyboard)
@@ -78,6 +96,15 @@ class ConfigurationPanel(QWidget):
 
         self.detail_group = QGroupBox("按键配置")
         detail_layout = QVBoxLayout()
+        controls_layout = QHBoxLayout()
+        self.hide_button = QPushButton("隐藏该按键")
+        self.hide_button.clicked.connect(self._on_toggle_hidden)
+        controls_layout.addWidget(self.hide_button)
+        self.delete_button = QPushButton("删除该按键")
+        self.delete_button.clicked.connect(self._on_delete_selected)
+        controls_layout.addWidget(self.delete_button)
+        controls_layout.addStretch(1)
+        detail_layout.addLayout(controls_layout)
         self.form_stack = QStackedWidget()
 
         self.empty_page = QWidget()
@@ -91,6 +118,23 @@ class ConfigurationPanel(QWidget):
         self.normal_sequence_edit = QLineEdit()
         self.normal_sequence_edit.textChanged.connect(self._on_normal_sequence_changed)
         normal_form.addRow("输出内容", self.normal_sequence_edit)
+        self.normal_activation_combo = self._create_activation_combo()
+        self.normal_activation_combo.currentIndexChanged.connect(
+            self._on_normal_activation_changed
+        )
+        normal_form.addRow("触发方式", self.normal_activation_combo)
+        self.normal_hold_combo = self._create_hold_combo()
+        self.normal_hold_combo.currentIndexChanged.connect(self._on_normal_hold_behavior_changed)
+        normal_form.addRow("长按行为", self.normal_hold_combo)
+        self.normal_repeat_spin = self._create_repeat_spin()
+        self.normal_repeat_spin.valueChanged.connect(self._on_normal_repeat_interval_changed)
+        normal_form.addRow("重复间隔 (毫秒)", self.normal_repeat_spin)
+        self.normal_auto_hide_check = QCheckBox("在配置窗口隐藏时自动隐去")
+        self.normal_auto_hide_check.toggled.connect(self._on_normal_auto_hide_changed)
+        normal_form.addRow("自动隐去", self.normal_auto_hide_check)
+        self.normal_auto_hide_delay = self._create_auto_hide_spin()
+        self.normal_auto_hide_delay.valueChanged.connect(self._on_normal_auto_hide_delay_changed)
+        normal_form.addRow("隐去延迟 (毫秒)", self.normal_auto_hide_delay)
         self.normal_x_spin = self._create_spin_box()
         self.normal_x_spin.valueChanged.connect(self._on_normal_position_changed)
         normal_form.addRow("X 坐标", self.normal_x_spin)
@@ -107,6 +151,23 @@ class ConfigurationPanel(QWidget):
         self.toggle_label_edit = QLineEdit()
         self.toggle_label_edit.textChanged.connect(self._on_toggle_label_changed)
         toggle_form.addRow("显示文本", self.toggle_label_edit)
+        self.toggle_activation_combo = self._create_activation_combo()
+        self.toggle_activation_combo.currentIndexChanged.connect(
+            self._on_toggle_activation_changed
+        )
+        toggle_form.addRow("触发方式", self.toggle_activation_combo)
+        self.toggle_hold_combo = self._create_hold_combo()
+        self.toggle_hold_combo.currentIndexChanged.connect(self._on_toggle_hold_behavior_changed)
+        toggle_form.addRow("长按行为", self.toggle_hold_combo)
+        self.toggle_repeat_spin = self._create_repeat_spin()
+        self.toggle_repeat_spin.valueChanged.connect(self._on_toggle_repeat_interval_changed)
+        toggle_form.addRow("重复间隔 (毫秒)", self.toggle_repeat_spin)
+        self.toggle_auto_hide_check = QCheckBox("在配置窗口隐藏时自动隐去")
+        self.toggle_auto_hide_check.toggled.connect(self._on_toggle_auto_hide_changed)
+        toggle_form.addRow("自动隐去", self.toggle_auto_hide_check)
+        self.toggle_auto_hide_delay = self._create_auto_hide_spin()
+        self.toggle_auto_hide_delay.valueChanged.connect(self._on_toggle_auto_hide_delay_changed)
+        toggle_form.addRow("隐去延迟 (毫秒)", self.toggle_auto_hide_delay)
         self.toggle_x_spin = self._create_spin_box()
         self.toggle_x_spin.valueChanged.connect(self._on_toggle_position_changed)
         toggle_form.addRow("X 坐标", self.toggle_x_spin)
@@ -144,6 +205,23 @@ class ConfigurationPanel(QWidget):
             lambda text: self._on_hover_sequence_changed("right", text)
         )
         hover_form.addRow("右侧输出", self.hover_right_edit)
+        self.hover_activation_combo = self._create_activation_combo()
+        self.hover_activation_combo.currentIndexChanged.connect(
+            self._on_hover_activation_changed
+        )
+        hover_form.addRow("触发方式", self.hover_activation_combo)
+        self.hover_hold_combo = self._create_hold_combo()
+        self.hover_hold_combo.currentIndexChanged.connect(self._on_hover_hold_behavior_changed)
+        hover_form.addRow("长按行为", self.hover_hold_combo)
+        self.hover_repeat_spin = self._create_repeat_spin()
+        self.hover_repeat_spin.valueChanged.connect(self._on_hover_repeat_interval_changed)
+        hover_form.addRow("重复间隔 (毫秒)", self.hover_repeat_spin)
+        self.hover_auto_hide_check = QCheckBox("在配置窗口隐藏时自动隐去")
+        self.hover_auto_hide_check.toggled.connect(self._on_hover_auto_hide_changed)
+        hover_form.addRow("自动隐去", self.hover_auto_hide_check)
+        self.hover_auto_hide_delay = self._create_auto_hide_spin()
+        self.hover_auto_hide_delay.valueChanged.connect(self._on_hover_auto_hide_delay_changed)
+        hover_form.addRow("隐去延迟 (毫秒)", self.hover_auto_hide_delay)
         self.hover_x_spin = self._create_spin_box()
         self.hover_x_spin.valueChanged.connect(self._on_hover_position_changed)
         hover_form.addRow("X 坐标", self.hover_x_spin)
@@ -164,12 +242,63 @@ class ConfigurationPanel(QWidget):
         self.update_toggle_button_state()
         self.update_hover_button_state()
         self._show_empty_form()
+        self._update_control_buttons()
 
     def _create_spin_box(self) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(-10000, 10000)
         spin.setSingleStep(5)
         return spin
+
+    def _create_activation_combo(self) -> QComboBox:
+        combo = QComboBox()
+        for label, value in self.ACTIVATION_OPTIONS:
+            combo.addItem(label, value)
+        return combo
+
+    def _create_hold_combo(self) -> QComboBox:
+        combo = QComboBox()
+        for label, value in self.HOLD_OPTIONS:
+            combo.addItem(label, value)
+        return combo
+
+    def _create_repeat_spin(self) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(10, 5000)
+        spin.setSingleStep(50)
+        return spin
+
+    def _create_auto_hide_spin(self) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(500, 600000)
+        spin.setSingleStep(500)
+        return spin
+
+    def _select_combo_value(self, combo: QComboBox, value: str) -> None:
+        for index in range(combo.count()):
+            if combo.itemData(index) == value:
+                combo.setCurrentIndex(index)
+                return
+        if combo.count():
+            combo.setCurrentIndex(0)
+
+    def _update_hold_widgets(self, activation_combo: QComboBox, hold_combo: QComboBox, repeat_spin: QSpinBox) -> None:
+        mode = activation_combo.currentData()
+        hold_enabled = mode in self.HOLD_ACTIVATION_MODES
+        hold_combo.setEnabled(hold_enabled)
+        repeat_spin.setEnabled(
+            hold_enabled and hold_combo.currentData() == VirtualKeyWindow.HOLD_BEHAVIOR_REPEAT
+        )
+
+    def _read_repeat_interval(self, widget: VirtualKeyWindow) -> int:
+        raw = widget.definition.config.get(
+            "repeat_interval_ms", VirtualKeyWindow.DEFAULT_REPEAT_INTERVAL_MS
+        )
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = VirtualKeyWindow.DEFAULT_REPEAT_INTERVAL_MS
+        return max(10, value)
 
     def refresh_keys(self, select: Optional[VirtualKeyWindow] = None) -> None:
         target = select or self.selected_widget
@@ -203,6 +332,7 @@ class ConfigurationPanel(QWidget):
         self._loading = False
         if widget is self.selected_widget:
             self._load_widget(widget)
+        self._update_control_buttons()
 
     def update_edit_mode(self, edit_mode: bool) -> None:
         self.toggle_edit_button.blockSignals(True)
@@ -223,8 +353,10 @@ class ConfigurationPanel(QWidget):
         self.selected_widget = current.data(Qt.ItemDataRole.UserRole) if current else None
         if not self.selected_widget:
             self._show_empty_form()
+            self._update_control_buttons()
             return
         self._load_widget(self.selected_widget)
+        self._update_control_buttons()
 
     def _load_widget(self, widget: VirtualKeyWindow) -> None:
         self._loading = True
@@ -246,6 +378,24 @@ class ConfigurationPanel(QWidget):
         self.normal_x_spin.setValue(int(position.x()))
         self.normal_y_spin.setValue(int(position.y()))
         self.normal_locked.setChecked(widget.definition.locked)
+        activation = str(
+            widget.definition.config.get(
+                "activation_mode", VirtualKeyWindow.ACTIVATION_CLICK_ONCE
+            )
+        )
+        hold_behavior = str(
+            widget.definition.config.get("hold_behavior", VirtualKeyWindow.HOLD_BEHAVIOR_TRUE)
+        )
+        self._select_combo_value(self.normal_activation_combo, activation)
+        self._select_combo_value(self.normal_hold_combo, hold_behavior)
+        self.normal_repeat_spin.setValue(self._read_repeat_interval(widget))
+        auto_enabled = bool(widget.definition.config.get("auto_fade_enabled", False))
+        self.normal_auto_hide_check.setChecked(auto_enabled)
+        self.normal_auto_hide_delay.setValue(self._read_auto_hide_delay(widget))
+        self._update_auto_hide_widgets(self.normal_auto_hide_check, self.normal_auto_hide_delay)
+        self._update_hold_widgets(
+            self.normal_activation_combo, self.normal_hold_combo, self.normal_repeat_spin
+        )
 
     def _load_toggle_widget(self, widget: VirtualKeyWindow) -> None:
         self.form_stack.setCurrentIndex(self.TOGGLE_INDEX)
@@ -254,6 +404,24 @@ class ConfigurationPanel(QWidget):
         self.toggle_x_spin.setValue(int(position.x()))
         self.toggle_y_spin.setValue(int(position.y()))
         self.toggle_locked.setChecked(widget.definition.locked)
+        activation = str(
+            widget.definition.config.get(
+                "activation_mode", VirtualKeyWindow.ACTIVATION_CLICK_ONCE
+            )
+        )
+        hold_behavior = str(
+            widget.definition.config.get("hold_behavior", VirtualKeyWindow.HOLD_BEHAVIOR_TRUE)
+        )
+        self._select_combo_value(self.toggle_activation_combo, activation)
+        self._select_combo_value(self.toggle_hold_combo, hold_behavior)
+        self.toggle_repeat_spin.setValue(self._read_repeat_interval(widget))
+        auto_enabled = bool(widget.definition.config.get("auto_fade_enabled", False))
+        self.toggle_auto_hide_check.setChecked(auto_enabled)
+        self.toggle_auto_hide_delay.setValue(self._read_auto_hide_delay(widget))
+        self._update_auto_hide_widgets(self.toggle_auto_hide_check, self.toggle_auto_hide_delay)
+        self._update_hold_widgets(
+            self.toggle_activation_combo, self.toggle_hold_combo, self.toggle_repeat_spin
+        )
 
     def _load_hover_widget(self, widget: VirtualKeyWindow) -> None:
         self.form_stack.setCurrentIndex(self.HOVER_INDEX)
@@ -269,11 +437,35 @@ class ConfigurationPanel(QWidget):
         self.hover_x_spin.setValue(int(position.x()))
         self.hover_y_spin.setValue(int(position.y()))
         self.hover_locked.setChecked(widget.definition.locked)
+        activation = str(
+            widget.definition.config.get(
+                "activation_mode", VirtualKeyWindow.ACTIVATION_HOVER_HOLD
+            )
+        )
+        hold_behavior = str(
+            widget.definition.config.get("hold_behavior", VirtualKeyWindow.HOLD_BEHAVIOR_TRUE)
+        )
+        self._select_combo_value(self.hover_activation_combo, activation)
+        self._select_combo_value(self.hover_hold_combo, hold_behavior)
+        self.hover_repeat_spin.setValue(self._read_repeat_interval(widget))
+        auto_enabled = bool(widget.definition.config.get("auto_fade_enabled", False))
+        self.hover_auto_hide_check.setChecked(auto_enabled)
+        self.hover_auto_hide_delay.setValue(self._read_auto_hide_delay(widget))
+        self._update_auto_hide_widgets(self.hover_auto_hide_check, self.hover_auto_hide_delay)
+        self._update_hold_widgets(
+            self.hover_activation_combo, self.hover_hold_combo, self.hover_repeat_spin
+        )
 
     def _describe_widget(self, widget: VirtualKeyWindow) -> str:
         kind = widget.definition.kind or "normal"
         label = widget.definition.label or "(未命名)"
-        return f"{label} - {self._kind_display(kind)}"
+        status = []
+        if widget.definition.config.get("hidden"):
+            status.append("隐藏")
+        if widget.definition.config.get("auto_fade_enabled"):
+            status.append("自动隐去")
+        suffix = f" [{'，'.join(status)}]" if status else ""
+        return f"{label} - {self._kind_display(kind)}{suffix}"
 
     def _kind_display(self, kind: str) -> str:
         mapping = {
@@ -296,6 +488,45 @@ class ConfigurationPanel(QWidget):
         self.selected_widget.definition.sequence = text
         self.keyboard.notify_key_changed(self.selected_widget)
 
+    def _on_normal_activation_changed(self, index: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        mode = str(self.normal_activation_combo.currentData())
+        self.selected_widget.definition.config["activation_mode"] = mode
+        self._update_hold_widgets(
+            self.normal_activation_combo, self.normal_hold_combo, self.normal_repeat_spin
+        )
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_normal_hold_behavior_changed(self, index: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        behavior = str(self.normal_hold_combo.currentData())
+        self.selected_widget.definition.config["hold_behavior"] = behavior
+        self._update_hold_widgets(
+            self.normal_activation_combo, self.normal_hold_combo, self.normal_repeat_spin
+        )
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_normal_repeat_interval_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["repeat_interval_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_normal_auto_hide_changed(self, checked: bool) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_enabled"] = bool(checked)
+        self._update_auto_hide_widgets(self.normal_auto_hide_check, self.normal_auto_hide_delay)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_normal_auto_hide_delay_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_delay_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
     def _on_normal_position_changed(self, value: int) -> None:
         if self._loading or not self.selected_widget:
             return
@@ -314,6 +545,45 @@ class ConfigurationPanel(QWidget):
             return
         self.selected_widget.definition.label = text
         self.selected_widget.update()
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_toggle_activation_changed(self, index: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        mode = str(self.toggle_activation_combo.currentData())
+        self.selected_widget.definition.config["activation_mode"] = mode
+        self._update_hold_widgets(
+            self.toggle_activation_combo, self.toggle_hold_combo, self.toggle_repeat_spin
+        )
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_toggle_hold_behavior_changed(self, index: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        behavior = str(self.toggle_hold_combo.currentData())
+        self.selected_widget.definition.config["hold_behavior"] = behavior
+        self._update_hold_widgets(
+            self.toggle_activation_combo, self.toggle_hold_combo, self.toggle_repeat_spin
+        )
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_toggle_repeat_interval_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["repeat_interval_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_toggle_auto_hide_changed(self, checked: bool) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_enabled"] = bool(checked)
+        self._update_auto_hide_widgets(self.toggle_auto_hide_check, self.toggle_auto_hide_delay)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_toggle_auto_hide_delay_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_delay_ms"] = int(value)
         self.keyboard.notify_key_changed(self.selected_widget)
 
     def _on_toggle_position_changed(self, value: int) -> None:
@@ -362,6 +632,45 @@ class ConfigurationPanel(QWidget):
         self.selected_widget.update_style()
         self.keyboard.notify_key_changed(self.selected_widget)
 
+    def _on_hover_activation_changed(self, index: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        mode = str(self.hover_activation_combo.currentData())
+        self.selected_widget.definition.config["activation_mode"] = mode
+        self._update_hold_widgets(
+            self.hover_activation_combo, self.hover_hold_combo, self.hover_repeat_spin
+        )
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_hover_hold_behavior_changed(self, index: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        behavior = str(self.hover_hold_combo.currentData())
+        self.selected_widget.definition.config["hold_behavior"] = behavior
+        self._update_hold_widgets(
+            self.hover_activation_combo, self.hover_hold_combo, self.hover_repeat_spin
+        )
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_hover_repeat_interval_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["repeat_interval_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_hover_auto_hide_changed(self, checked: bool) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_enabled"] = bool(checked)
+        self._update_auto_hide_widgets(self.hover_auto_hide_check, self.hover_auto_hide_delay)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
+    def _on_hover_auto_hide_delay_changed(self, value: int) -> None:
+        if self._loading or not self.selected_widget:
+            return
+        self.selected_widget.definition.config["auto_fade_delay_ms"] = int(value)
+        self.keyboard.notify_key_changed(self.selected_widget)
+
     def _apply_position(self, point: QPoint) -> None:
         if not self.selected_widget:
             return
@@ -375,3 +684,41 @@ class ConfigurationPanel(QWidget):
 
     def update_hover_button_state(self) -> None:
         self.add_hover_button.setEnabled(self.keyboard.hover_key_available())
+
+    def _on_delete_selected(self) -> None:
+        if not self.selected_widget:
+            return
+        self.keyboard.remove_key(self.selected_widget)
+        self.selected_widget = None
+        self._update_control_buttons()
+
+    def _on_toggle_hidden(self) -> None:
+        if not self.selected_widget:
+            return
+        hidden = bool(self.selected_widget.definition.config.get("hidden", False))
+        self.selected_widget.set_manual_hidden(not hidden)
+        self.keyboard.notify_key_changed(self.selected_widget)
+        self._update_control_buttons()
+
+    def _update_auto_hide_widgets(self, checkbox: QCheckBox, spin: QSpinBox) -> None:
+        spin.setEnabled(checkbox.isChecked())
+
+    def _read_auto_hide_delay(self, widget: VirtualKeyWindow) -> int:
+        raw = widget.definition.config.get(
+            "auto_fade_delay_ms", VirtualKeyWindow.DEFAULT_AUTO_FADE_DELAY_MS
+        )
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = VirtualKeyWindow.DEFAULT_AUTO_FADE_DELAY_MS
+        return max(500, value)
+
+    def _update_control_buttons(self) -> None:
+        has_selection = self.selected_widget is not None
+        self.delete_button.setEnabled(has_selection)
+        self.hide_button.setEnabled(has_selection)
+        if not has_selection:
+            self.hide_button.setText("隐藏该按键")
+            return
+        hidden = bool(self.selected_widget.definition.config.get("hidden", False))
+        self.hide_button.setText("显示该按键" if hidden else "隐藏该按键")
