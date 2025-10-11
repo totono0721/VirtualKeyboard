@@ -3,14 +3,18 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import List, Optional, Tuple
 
 from PyQt6.QtCore import QPoint, QRect, Qt
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QFileDialog,
     QMainWindow,
+    QMenu,
     QMessageBox,
+    QSystemTrayIcon,
+    QStyle,
 )
 
 from .config_panel import ConfigurationPanel
@@ -37,8 +41,12 @@ class KeyboardWindow(QMainWindow):
         self.layout_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "layout.json"))
         self.config_panel: Optional[ConfigurationPanel] = None
         self._configuration_visible = True
+        self.tray_icon: Optional[QSystemTrayIcon] = None
+        self._tray_menu_show_action: Optional[QAction] = None
+        self._tray_menu_hide_action: Optional[QAction] = None
 
         self._setup_actions()
+        self._setup_tray_icon()
         self.config_panel = ConfigurationPanel(self)
         self.setCentralWidget(self.config_panel)
         self._load_layout()
@@ -147,19 +155,13 @@ class KeyboardWindow(QMainWindow):
         self.send_sequence_once(widget.definition.sequence)
 
     def toggle_configuration_visibility(self) -> None:
-        if self.isVisible():
-            self.hide()
-            self._configuration_visible = False
-        else:
-            self.show()
-            self.raise_()
-            self.activateWindow()
-            self._configuration_visible = True
-        for widget in self.keys:
-            widget.on_configuration_visibility_changed(self._configuration_visible)
+        self._set_configuration_visible(not self._configuration_visible)
 
     def configuration_visible(self) -> bool:
         return self._configuration_visible
+
+    def show_panel(self) -> None:
+        self._set_configuration_visible(True)
 
     def send_sequence_once(self, sequence: str) -> None:
         text = sequence.strip()
@@ -295,7 +297,17 @@ class KeyboardWindow(QMainWindow):
         for widget in list(self.keys):
             widget.close()
         self.keys.clear()
+        if self.tray_icon:
+            self.tray_icon.hide()
         super().closeEvent(event)
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._update_tray_menu_state()
+
+    def hideEvent(self, event) -> None:  # type: ignore[override]
+        super().hideEvent(event)
+        self._update_tray_menu_state()
 
     def _create_key_widget(
         self, definition: KeyDefinition, *, refresh: bool = True
@@ -315,3 +327,98 @@ class KeyboardWindow(QMainWindow):
             self.config_panel.update_toggle_button_state()
             self.config_panel.update_hover_button_state()
         return widget
+
+    def _setup_tray_icon(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        icon_path = _resolve_tray_icon_path()
+        icon = (
+            QIcon(icon_path)
+            if icon_path
+            else self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+        )
+        tray_icon = QSystemTrayIcon(icon, self)
+        tray_icon.setToolTip("虚拟按键面板")
+
+        menu = QMenu(self)
+        show_action = QAction("显示面板", self)
+        show_action.triggered.connect(self.show_panel)
+        hide_action = QAction("隐藏面板", self)
+        hide_action.triggered.connect(lambda: self._set_configuration_visible(False))
+        exit_action = QAction("退出程序", self)
+        exit_action.triggered.connect(self.close)
+
+        menu.addAction(show_action)
+        menu.addAction(hide_action)
+        menu.addSeparator()
+        menu.addAction(exit_action)
+        tray_icon.setContextMenu(menu)
+        tray_icon.activated.connect(self._handle_tray_activated)
+        tray_icon.show()
+
+        self.tray_icon = tray_icon
+        self._tray_menu_show_action = show_action
+        self._tray_menu_hide_action = hide_action
+        self._update_tray_menu_state()
+
+    def _handle_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self.show_panel()
+
+    def _update_tray_menu_state(self) -> None:
+        visible = self.isVisible()
+        if self._tray_menu_show_action:
+            self._tray_menu_show_action.setEnabled(not visible)
+        if self._tray_menu_hide_action:
+            self._tray_menu_hide_action.setEnabled(visible)
+
+    def _set_configuration_visible(self, visible: bool) -> None:
+        if visible:
+            if not self.isVisible():
+                self.show()
+            self.raise_()
+            self.activateWindow()
+            self._configuration_visible = True
+        else:
+            if self.isVisible():
+                self.hide()
+            self._configuration_visible = False
+        for widget in self.keys:
+            widget.on_configuration_visibility_changed(self._configuration_visible)
+        self._update_tray_menu_state()
+
+
+def _resolve_tray_icon_path() -> Optional[str]:
+    """Return an absolute path to the tray icon if the user provided one."""
+
+    env_path = os.environ.get("VK_TRAY_ICON")
+    if env_path:
+        candidate = os.path.abspath(env_path)
+        if os.path.exists(candidate):
+            return candidate
+
+    search_roots = [
+        os.path.join(os.path.dirname(__file__), "resources"),
+        os.path.dirname(os.path.abspath(sys.argv[0])) if sys.argv else os.getcwd(),
+    ]
+
+    frozen_base = getattr(sys, "_MEIPASS", None)
+    if frozen_base:
+        search_roots.append(frozen_base)
+        search_roots.append(os.path.join(frozen_base, "vk_app", "resources"))
+
+    candidate_names = [
+        "tray_icon.ico",
+        "tray_icon.png",
+        "tray_icon_white.png",
+    ]
+
+    for root in search_roots:
+        for name in candidate_names:
+            candidate = os.path.join(root, name)
+            if os.path.exists(candidate):
+                return candidate
+    return None
