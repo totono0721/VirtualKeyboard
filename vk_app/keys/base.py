@@ -181,7 +181,7 @@ class VirtualKeyWindow(QWidget):
     def contextMenuEvent(self, event) -> None:  # type: ignore[override]
         menu = QMenu(self)
         rename_action = menu.addAction("设置按键显示/输出…")
-        lock_action_text = "取消锁定" if self.definition.locked else "锁定按键"
+        lock_action_text = "允许拖动" if self.definition.locked else "禁止拖动"
         lock_action = menu.addAction(lock_action_text)
         menu.addSeparator()
         delete_action = menu.addAction("删除")
@@ -340,7 +340,7 @@ class VirtualKeyWindow(QWidget):
             if self._send_sequence_once(self._hold_sequence):
                 self._register_activity()
 
-    def _flash_activation_feedback(self) -> None:
+    def _flash_activation_feedback(self, region: Optional[str] = None) -> None:
         if self._hold_sequence or self._toggle_hold_active:
             return
         self._active_visual = True
@@ -401,6 +401,8 @@ class VirtualKeyWindow(QWidget):
             config["auto_fade_enabled"] = False
         if "auto_fade_delay_ms" not in config:
             config["auto_fade_delay_ms"] = self.DEFAULT_AUTO_FADE_DELAY_MS
+        if "auto_fade_min_opacity" not in config:
+            config["auto_fade_min_opacity"] = int(self.FADE_MIN_OPACITY * 100)
 
     def _apply_visibility_config(self) -> None:
         if self._manual_hidden():
@@ -451,9 +453,10 @@ class VirtualKeyWindow(QWidget):
     def _begin_auto_fade(self) -> None:
         if self._manual_hidden():
             return
-        self._fade_target = self.FADE_MIN_OPACITY
-        if self.windowOpacity() <= self.FADE_MIN_OPACITY + 0.02:
-            self._set_opacity(self.FADE_MIN_OPACITY)
+        target = self._auto_fade_min_opacity()
+        self._fade_target = target
+        if self.windowOpacity() <= target + 0.02:
+            self._set_opacity(target)
             return
         self._fade_timer.start()
 
@@ -465,7 +468,7 @@ class VirtualKeyWindow(QWidget):
         target = self._fade_target
         if abs(current - target) <= 0.02:
             self._set_opacity(target)
-            if target <= self.FADE_MIN_OPACITY + 0.01:
+            if target <= self._auto_fade_min_opacity() + 0.01:
                 self._fade_timer.stop()
             return
         if current < target:
@@ -473,7 +476,10 @@ class VirtualKeyWindow(QWidget):
         else:
             new_value = max(target, current - self.FADE_STEP)
         self._set_opacity(new_value)
-        if abs(new_value - target) <= 0.02 and target <= self.FADE_MIN_OPACITY + 0.01:
+        if (
+            abs(new_value - target) <= 0.02
+            and target <= self._auto_fade_min_opacity() + 0.01
+        ):
             self._fade_timer.stop()
 
     def _set_opacity(self, value: float) -> None:
@@ -486,6 +492,17 @@ class VirtualKeyWindow(QWidget):
     # endregion
 
     # endregion
+
+    def _auto_fade_min_opacity(self) -> float:
+        raw = self.definition.config.get(
+            "auto_fade_min_opacity", int(self.FADE_MIN_OPACITY * 100)
+        )
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = self.FADE_MIN_OPACITY * 100
+        value = max(0.0, min(100.0, value))
+        return value / 100.0
 
     def _prompt_for_label(self) -> None:
         label, ok = QInputDialog.getText(self, "设置按键", "显示文本:", text=self.definition.label)
