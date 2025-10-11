@@ -182,6 +182,14 @@ class KeySender:
             seen_vks.add(vk)
             skip_groups_for_implicit.add(group)
 
+        shift_active = "SHIFT" in skip_groups_for_implicit
+        if len(base_name) == 1 and base_name.isalpha():
+            if shift_active:
+                upper = base_name.upper()
+                base_name = upper if len(upper) == 1 else base_name
+            else:
+                base_name = base_name.lower()
+
         tokens = tuple(modifier_names + [base_name])
         return ParsedSequence(base_vk, tuple(modifiers), tokens)
 
@@ -233,12 +241,13 @@ class KeySender:
             return vk, name, []
 
         if len(token) == 1:
-            char_code = ord(token)
+            char = token
+            char_code = ord(char)
             vk_scan = user32.VkKeyScanExW(char_code, self._cached_layout)
             if vk_scan == -1:
                 raise ValueError(f"Unsupported key: {token}")
             vk = vk_scan & 0xFF
-            base_char = token.upper() if token.isalpha() else token
+            base_char = char.lower() if char.isalpha() else char
             implicit: List[Tuple[int, str, str]] = []
             for mask, (mod_vk, name, group) in zip(
                 (0x0100, 0x0200, 0x0400), self._IMPLICIT_MODIFIERS

@@ -95,7 +95,7 @@ class KeyboardWindow(QMainWindow):
         position = QPoint(50 + (index % 5) * 90, 50 + (index // 5) * 90)
         definition = KeyDefinition(
             label="A",
-            sequence="A",
+            sequence="a",
             position=position,
             config={
                 "activation_mode": VirtualKeyWindow.ACTIVATION_CLICK_ONCE,
@@ -128,10 +128,10 @@ class KeyboardWindow(QMainWindow):
             position=position,
             kind="hover_hold",
             config={
-                "up": "W",
-                "down": "S",
-                "left": "A",
-                "right": "D",
+                "up": "w",
+                "down": "s",
+                "left": "a",
+                "right": "d",
                 "center_label": "移动",
                 "activation_mode": VirtualKeyWindow.ACTIVATION_HOVER_HOLD,
                 "hold_behavior": VirtualKeyWindow.HOLD_BEHAVIOR_TRUE,
