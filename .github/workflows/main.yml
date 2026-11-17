@@ -1,0 +1,27 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: Build EXE
+        run: |
+          pyinstaller --noconfirm --noconsole --onefile --name VirtualKeyPad virtual_keyboard.py
+          copy layout.json dist\
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VirtualKeyPad-Windows
+          path: dist/
